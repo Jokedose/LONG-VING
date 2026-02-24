@@ -18,6 +18,9 @@ ai-agent/
 รายการงานด้านล่างนี้คือแผนงานที่อยู่ในโฟลเดอร์ `todo/` ซึ่งกำลังรอให้ Agent ดำเนินการ:
 
 - [2026-02-23: รีเซ็ตฐานข้อมูลและแผนจาก Excel](./history/2026-02-23-Yearly-Plan-Excel.md)
+- [2026-02-24: AI วิเคราะห์ผลการวิ่งแบบรายวัน (Daily Analysis with Historical Context)](./todo/2026-02-24-AI-Daily-Analysis.md)
+- [2026-02-24: ปรับปรุง Session Detail & AI Analysis สำหรับเป้าหมาย Zone 2 เพซ 7](./todo/2026-02-24-Session-Detail-Zone2-Pace7.md)
+- [2026-02-24: ฟีเจอร์เพิ่มเติมและเทคนิคพิเศษเพื่อเป้าหมาย Zone 2 เพซ 7](./todo/2026-02-24-Advanced-Features-Zone2-Pace7.md)
 
 ---
 
