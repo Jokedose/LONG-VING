@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -9,16 +10,17 @@ import { sessionRepository, type Session } from '../lib/db/sessionRepository';
 import { useUserProfile } from '../store/userStore';
 import { queryKeys } from '../lib/queryKeys';
 import { format, parseISO } from 'date-fns';
+import { AiAnalysisService } from '../lib/aiAnalysisService';
 
 export default function Sessions() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const { data: profile } = useUserProfile();
 
-  // Import state
   const [importing, setImporting] = useState(false);
   const [importStatus, setImportStatus] = useState('');
   const [importProgress, setImportProgress] = useState(0);
+  const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
 
   const { data: sessions = [], isLoading } = useQuery({
     queryKey: queryKeys.sessions.all,
@@ -27,14 +29,16 @@ export default function Sessions() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => sessionRepository.deleteSession(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all });
+      setDeleteTargetId(null);
+    },
     onError: () => alert('ลบข้อมูลไม่สำเร็จ'),
   });
 
   const handleDelete = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
-    if (!confirm('ยืนยันการลบประวัติการวิ่งนี้?')) return;
-    deleteMutation.mutate(id);
+    setDeleteTargetId(id);
   };
 
   const handleImport = async () => {
@@ -73,7 +77,12 @@ export default function Sessions() {
       setImportProgress(50);
       const sessionId = uuidv4();
       let zone2_pct = 0;
+      let avg_cadence = undefined;
+      let efficiency_factor = undefined;
+      let aerobic_decoupling_pct = undefined;
+
       if (profile && fitData.records && fitData.records.length > 0) {
+        // --- 1. Zone 2 Percentage ---
         const maxHR = profile.max_hr || 185;
         const restingHR = profile.resting_hr || 60;
         const reserve = maxHR - restingHR;
@@ -82,7 +91,45 @@ export default function Sessions() {
         const hrRecs = fitData.records.filter((r: any) => r.heart_rate !== undefined);
         const z2Recs = hrRecs.filter((r: any) => r.heart_rate >= z2Min && r.heart_rate <= z2Max);
         if (hrRecs.length > 0) zone2_pct = (z2Recs.length / hrRecs.length) * 100;
+
+        // --- 2. Average Cadence ---
+        const cadenceRecs = fitData.records.filter((r: any) => r.cadence !== undefined && r.cadence > 0);
+        if (cadenceRecs.length > 0) {
+          // Generally fit parser gives RPM for one leg. Multiply by 2 for SPM for running.
+          const sumCadence = cadenceRecs.reduce((sum: number, r: any) => sum + r.cadence, 0);
+          avg_cadence = Math.round((sumCadence / cadenceRecs.length) * 2);
+        }
+
+        // --- 3. Efficiency Factor (EF) = Normalized Speed (m/min) / Avg HR ---
+        const avgHR = session.avg_heart_rate || 0;
+        const avgSpeed = session.avg_speed || 0;
+        if (avgHR > 0 && avgSpeed > 0) {
+          const speedMin = avgSpeed * 60; // m/min
+          efficiency_factor = Number((speedMin / avgHR).toFixed(2));
+        }
+
+        // --- 4. Aerobic Decoupling (Pa:Hr ratio between 1st and 2nd half) ---
+        const speedHrRecs = fitData.records.filter((r: any) => r.heart_rate !== undefined && (r.enhanced_speed ?? r.speed) !== undefined && r.heart_rate > 0);
+        if (speedHrRecs.length > 10) {
+          const midIndex = Math.floor(speedHrRecs.length / 2);
+          const firstHalf = speedHrRecs.slice(0, midIndex);
+          const secondHalf = speedHrRecs.slice(midIndex);
+
+          const getRatio = (recs: any[]) => {
+            const avgS = recs.reduce((sum: number, r: any) => sum + (r.enhanced_speed ?? r.speed), 0) / recs.length;
+            const avgH = recs.reduce((sum: number, r: any) => sum + r.heart_rate, 0) / recs.length;
+            return avgH > 0 ? avgS / avgH : 0;
+          };
+
+          const ratio1 = getRatio(firstHalf);
+          const ratio2 = getRatio(secondHalf);
+          if (ratio1 > 0) {
+            // Decoupling %: How much did the Speed/HR ratio drop?
+            aerobic_decoupling_pct = Number((((ratio1 - ratio2) / ratio1) * 100).toFixed(2));
+          }
+        }
       }
+
       await sessionRepository.createSession({
         id: sessionId, started_at: startTime,
         duration_secs: Math.round(session.total_timer_time || session.total_elapsed_time),
@@ -90,7 +137,8 @@ export default function Sessions() {
         avg_hr: Math.round(session.avg_heart_rate || 0),
         max_hr: Math.round(session.max_heart_rate || 0),
         avg_pace_sec_per_km: session.avg_speed ? (1000 / session.avg_speed) : 0,
-        zone2_pct, raw_fit_path: selectedPath.split('/').pop() || selectedPath
+        zone2_pct, raw_fit_path: selectedPath.split('/').pop() || selectedPath,
+        avg_cadence, efficiency_factor, aerobic_decoupling_pct
       });
       if (fitData.records && fitData.records.length > 0) {
         const totalRecords = fitData.records.length;
@@ -109,6 +157,31 @@ export default function Sessions() {
           setImportProgress(50 + Math.floor((i / totalRecords) * 50));
         }
       }
+      
+      setImportStatus('🤖 กำลังให้ AI วิเคราะห์การวิ่ง...');
+      try {
+        const historicalContext = await sessionRepository.getMonthlySummary();
+        const analysis = await AiAnalysisService.analyzeSession(
+          {
+            id: sessionId, started_at: startTime,
+            duration_secs: Math.round(session.total_timer_time || session.total_elapsed_time),
+            distance_m: session.total_distance, 
+            avg_hr: Math.round(session.avg_heart_rate || 0),
+            max_hr: Math.round(session.max_heart_rate || 0),
+            avg_pace_sec_per_km: session.avg_speed ? (1000 / session.avg_speed) : 0,
+            zone2_pct, raw_fit_path: selectedPath.split('/').pop() || selectedPath
+          },
+          profile || {},
+          historicalContext
+        );
+        
+        if (analysis) {
+          await sessionRepository.updateSessionAnalysis(sessionId, analysis);
+        }
+      } catch (aiErr) {
+        console.error("AI Analysis encountered an error, but import was successful:", aiErr);
+      }
+
       setImportStatus('✅ นำเข้าสำเร็จ!');
       setImportProgress(100);
       queryClient.invalidateQueries({ queryKey: queryKeys.sessions.all });
@@ -234,6 +307,14 @@ export default function Sessions() {
           </table>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={deleteTargetId !== null}
+        title="ยืนยันการลบประวัติการวิ่ง"
+        message="คุณต้องการลบประวัติการวิ่งนี้ใช่หรือไม่? สถิติและข้อมูลการวิ่งทั้งหมดจะถูกลบทิ้ง"
+        onConfirm={() => deleteTargetId && deleteMutation.mutate(deleteTargetId)}
+        onCancel={() => setDeleteTargetId(null)}
+      />
     </div>
   );
 }

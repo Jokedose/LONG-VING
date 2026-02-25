@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { useUserProfile, useUpdateProfile } from '../store/userStore';
+import { invoke } from '@tauri-apps/api/core';
 import { calcHRZones, HRZones } from '../lib/hrCalculator';
+import { GoogleGenerativeAI } from '@google/generative-ai';
 
 export default function Profile() {
   const { data: profile, isLoading } = useUserProfile();
@@ -9,7 +11,24 @@ export default function Profile() {
   const [age, setAge] = useState(27);
   const [restingHr, setRestingHr] = useState(62);
   const [maxHr, setMaxHr] = useState(193);
+  const [apiKey, setApiKey] = useState('');
+  const [apiKeyLoading, setApiKeyLoading] = useState(true);
+  const [testingKey, setTestingKey] = useState(false);
   const [zones, setZones] = useState<HRZones | null>(null);
+
+  useEffect(() => {
+    async function fetchApiKey() {
+      try {
+        const key = await invoke<string | null>('get_setting', { key: 'gemini_api_key' });
+        if (key) setApiKey(key);
+      } catch (e) {
+        console.error("Failed to fetch API key:", e);
+      } finally {
+        setApiKeyLoading(false);
+      }
+    }
+    fetchApiKey();
+  }, []);
 
   useEffect(() => {
     if (profile) {
@@ -25,11 +44,36 @@ export default function Profile() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
-    await updateProfile.mutateAsync({ id: profile?.id, age, resting_hr: restingHr, max_hr: maxHr });
-    alert('Profile saved!');
+    try {
+      await updateProfile.mutateAsync({ id: profile?.id, age, resting_hr: restingHr, max_hr: maxHr });
+      await invoke('set_setting', { key: 'gemini_api_key', value: apiKey });
+      alert('Profile and settings saved!');
+    } catch (e) {
+      alert("Failed to save settings.");
+      console.error(e);
+    }
   };
 
-  if (isLoading) {
+  const testApiKey = async () => {
+    if (!apiKey) {
+      alert('กรุณาใส่ API Key ก่อนทดสอบ');
+      return;
+    }
+    setTestingKey(true);
+    try {
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash" });
+      await model.generateContent("hello");
+      alert('✅ API Key ใช้งานได้สมบูรณ์ (Connection Successful!)');
+    } catch (e: any) {
+      console.error("API Test Failed:", e);
+      alert(`❌ API Key มีปัญหา: ${e.message || String(e)}`);
+    } finally {
+      setTestingKey(false);
+    }
+  };
+
+  if (isLoading || apiKeyLoading) {
     return <div className="p-8 text-center text-gray-500">Loading Profile...</div>;
   }
 
@@ -72,6 +116,29 @@ export default function Profile() {
               />
               <p className="text-xs text-gray-400 mt-2">ค่าพื้นฐาน = 220 - อายุ ({220 - age}) | ปรับเปลี่ยนได้ถ้าเคยทดสอบ</p>
             </div>
+            
+            <div className="pt-4 border-t border-gray-100 dark:border-zinc-800">
+              <label className="block text-sm font-bold mb-1 text-purple-600 dark:text-purple-400">Gemini API Key (AI Analysis)</label>
+              <div className="flex gap-2 relative">
+                <input 
+                  type="password" 
+                  value={apiKey} 
+                  onChange={e => setApiKey(e.target.value)}
+                  placeholder="AIzaSy..."
+                  className="w-full rounded-lg border border-gray-300 dark:border-zinc-700 bg-transparent px-4 py-2 focus:ring-2 focus:ring-purple-500 outline-none transition"
+                />
+                <button
+                  type="button"
+                  onClick={testApiKey}
+                  disabled={testingKey || !apiKey}
+                  className="shrink-0 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-sm font-medium px-4 py-2 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {testingKey ? 'Testing...' : 'Test API'}
+                </button>
+              </div>
+              <p className="text-xs text-gray-400 mt-2">ใช้สำหรับวิเคราะห์การวิ่งอัตโนมัติ (Daily Analysis)</p>
+            </div>
+
             <button 
               type="submit"
               disabled={updateProfile.isPending}

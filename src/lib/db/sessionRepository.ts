@@ -10,6 +10,10 @@ export interface Session {
   avg_pace_sec_per_km: number;
   zone2_pct: number;
   raw_fit_path: string;
+  ai_analysis?: string;
+  avg_cadence?: number;
+  efficiency_factor?: number;
+  aerobic_decoupling_pct?: number;
 }
 
 export interface Record {
@@ -107,6 +111,24 @@ export const sessionRepository = {
     } catch (error) {
       console.error('Failed to create records chunk:', error);
       throw error;
+    }
+  },
+
+  async updateSessionAnalysis(id: string, aiAnalysis: string): Promise<void> {
+    try {
+      await invoke('update_session_analysis', { id, aiAnalysis });
+    } catch (error) {
+      console.error('Failed to update session analysis:', error);
+      throw error;
+    }
+  },
+
+  async getSetting(key: string): Promise<string | null> {
+    try {
+      return await invoke<string | null>('get_setting', { key });
+    } catch (error) {
+      console.error(`Failed to get setting ${key}:`, error);
+      return null;
     }
   }
 };

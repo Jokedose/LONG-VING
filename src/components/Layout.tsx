@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { Home, Upload, Activity, Calendar, Scale, User, Moon, Sun } from 'lucide-react';
+import { Home, Activity, Calendar, Scale, User, Moon, Sun } from 'lucide-react';
 import { Link, Outlet, useLocation } from 'react-router-dom';
 
 export default function Layout() {
@@ -8,15 +8,28 @@ export default function Layout() {
 
   // Initialize theme
   useEffect(() => {
-    if (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    const savedTheme = localStorage.getItem('theme');
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    
+    if (savedTheme === 'dark' || (!savedTheme && prefersDark)) {
       setIsDarkMode(true);
       document.documentElement.classList.add('dark');
+    } else {
+      setIsDarkMode(false);
+      document.documentElement.classList.remove('dark');
     }
   }, []);
 
   const toggleTheme = () => {
-    setIsDarkMode(!isDarkMode);
-    document.documentElement.classList.toggle('dark');
+    const newMode = !isDarkMode;
+    setIsDarkMode(newMode);
+    if (newMode) {
+      document.documentElement.classList.add('dark');
+      localStorage.setItem('theme', 'dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+      localStorage.setItem('theme', 'light');
+    }
   };
 
   const navItems = [

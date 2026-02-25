@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react';
+import { ConfirmModal } from '../components/ConfirmModal';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { bodyMetricsRepository, type BodyMetrics } from '../lib/db/bodyMetricsRepository';
 import { queryKeys } from '../lib/queryKeys';
@@ -14,6 +15,7 @@ export default function BodyMetricsHistory() {
   const [viewMode, setViewMode] = useState<ViewMode>('list');
   const [ocrStatus, setOcrStatus] = useState('');
   const [ocrLoading, setOcrLoading] = useState(false);
+  const [deleteTargetId, setDeleteTargetId] = useState<number | null>(null);
 
   // Manual entry form state
   const [form, setForm] = useState({
@@ -31,7 +33,10 @@ export default function BodyMetricsHistory() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => bodyMetricsRepository.deleteBodyMetrics(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: queryKeys.bodyMetrics.all }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: queryKeys.bodyMetrics.all });
+      setDeleteTargetId(null);
+    },
     onError: (e) => alert('ลบข้อมูลไม่สำเร็จ: ' + e),
   });
 
@@ -311,8 +316,8 @@ export default function BodyMetricsHistory() {
               </div>
               <div className="flex justify-end">
                 <button
-                  onClick={() => m.id !== undefined && window.confirm('ลบข้อมูลนี้?') && deleteMutation.mutate(m.id)}
-                  disabled={deleteMutation.isPending}
+                  onClick={() => setDeleteTargetId(m.id ?? null)}
+                  disabled={deleteMutation.isPending && deleteTargetId === m.id}
                   className="p-2 text-zinc-300 hover:text-rose-500 transition-colors opacity-0 group-hover:opacity-100"
                   title="ลบ"
                 >🗑️</button>
@@ -335,6 +340,14 @@ export default function BodyMetricsHistory() {
           </div>
         )}
       </div>
+
+      <ConfirmModal
+        isOpen={deleteTargetId !== null}
+        title="ยืนยันการลบข้อมูล"
+        message="คุณต้องการลบข้อมูลสรีระนี้ใช่หรือไม่? การกระทำนี้ไม่สามารถย้อนกลับได้"
+        onConfirm={() => deleteTargetId !== null && deleteMutation.mutate(deleteTargetId)}
+        onCancel={() => setDeleteTargetId(null)}
+      />
     </div>
   );
 }

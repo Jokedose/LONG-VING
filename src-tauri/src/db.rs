@@ -22,6 +22,10 @@ pub struct Session {
     pub avg_pace_sec_per_km: f64,
     pub zone2_pct: f64,
     pub raw_fit_path: String,
+    pub ai_analysis: Option<String>,
+    pub avg_cadence: Option<i32>,
+    pub efficiency_factor: Option<f64>,
+    pub aerobic_decoupling_pct: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -108,6 +112,12 @@ impl DbManager {
         conn.execute_batch("PRAGMA foreign_keys = ON;")?;
         // Ensure schema exists — safe to run multiple times due to IF NOT EXISTS
         conn.execute_batch(include_str!("db/01_init.sql"))?;
+        
+        // Ensure new columns exist for existing databases without dropping data
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN avg_cadence INTEGER", []);
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN efficiency_factor REAL", []);
+        let _ = conn.execute("ALTER TABLE sessions ADD COLUMN aerobic_decoupling_pct REAL", []);
+        
         // Ensure at least one user profile row exists
         conn.execute_batch("INSERT OR IGNORE INTO users (id, age, resting_hr, max_hr) VALUES (1, 27, 62, 193);")?;
         Ok(conn)
@@ -135,34 +145,37 @@ pub fn update_user_profile(conn: &Connection, profile: UserProfile) -> Result<()
 
 // Session Commands
 pub fn get_all_sessions(conn: &Connection) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path FROM sessions ORDER BY started_at DESC")?;
+    let mut stmt = conn.prepare("SELECT id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path, ai_analysis, avg_cadence, efficiency_factor, aerobic_decoupling_pct FROM sessions ORDER BY started_at DESC")?;
     let sessions = stmt.query_map([], |row| {
         Ok(Session {
             id: row.get(0)?, started_at: row.get(1)?, duration_secs: row.get(2)?, distance_m: row.get(3)?,
-            avg_hr: row.get(4)?, max_hr: row.get(5)?, avg_pace_sec_per_km: row.get(6)?, zone2_pct: row.get(7)?, raw_fit_path: row.get(8)?,
+            avg_hr: row.get(4)?, max_hr: row.get(5)?, avg_pace_sec_per_km: row.get(6)?, zone2_pct: row.get(7)?, raw_fit_path: row.get(8)?, ai_analysis: row.get(9)?,
+            avg_cadence: row.get(10)?, efficiency_factor: row.get(11)?, aerobic_decoupling_pct: row.get(12)?,
         })
     })?.collect::<Result<Vec<_>>>()?;
     Ok(sessions)
 }
 
 pub fn get_recent_sessions(conn: &Connection, limit: i32) -> Result<Vec<Session>> {
-    let mut stmt = conn.prepare("SELECT id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path FROM sessions ORDER BY started_at DESC LIMIT ?1")?;
+    let mut stmt = conn.prepare("SELECT id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path, ai_analysis, avg_cadence, efficiency_factor, aerobic_decoupling_pct FROM sessions ORDER BY started_at DESC LIMIT ?1")?;
     let sessions = stmt.query_map(params![limit], |row| {
         Ok(Session {
             id: row.get(0)?, started_at: row.get(1)?, duration_secs: row.get(2)?, distance_m: row.get(3)?,
-            avg_hr: row.get(4)?, max_hr: row.get(5)?, avg_pace_sec_per_km: row.get(6)?, zone2_pct: row.get(7)?, raw_fit_path: row.get(8)?,
+            avg_hr: row.get(4)?, max_hr: row.get(5)?, avg_pace_sec_per_km: row.get(6)?, zone2_pct: row.get(7)?, raw_fit_path: row.get(8)?, ai_analysis: row.get(9)?,
+            avg_cadence: row.get(10)?, efficiency_factor: row.get(11)?, aerobic_decoupling_pct: row.get(12)?,
         })
     })?.collect::<Result<Vec<_>>>()?;
     Ok(sessions)
 }
 
 pub fn get_session_by_id(conn: &Connection, id: &str) -> Result<Option<Session>> {
-    let mut stmt = conn.prepare("SELECT id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path FROM sessions WHERE id = ?1")?;
+    let mut stmt = conn.prepare("SELECT id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path, ai_analysis, avg_cadence, efficiency_factor, aerobic_decoupling_pct FROM sessions WHERE id = ?1")?;
     let mut rows = stmt.query(params![id])?;
     if let Some(row) = rows.next()? {
         Ok(Some(Session {
             id: row.get(0)?, started_at: row.get(1)?, duration_secs: row.get(2)?, distance_m: row.get(3)?,
-            avg_hr: row.get(4)?, max_hr: row.get(5)?, avg_pace_sec_per_km: row.get(6)?, zone2_pct: row.get(7)?, raw_fit_path: row.get(8)?,
+            avg_hr: row.get(4)?, max_hr: row.get(5)?, avg_pace_sec_per_km: row.get(6)?, zone2_pct: row.get(7)?, raw_fit_path: row.get(8)?, ai_analysis: row.get(9)?,
+            avg_cadence: row.get(10)?, efficiency_factor: row.get(11)?, aerobic_decoupling_pct: row.get(12)?,
         }))
     } else { Ok(None) }
 }
@@ -300,9 +313,17 @@ pub fn is_session_duplicate(conn: &Connection, started_at: &str) -> Result<bool>
 
 pub fn create_session(conn: &Connection, s: Session) -> Result<()> {
     conn.execute(
-        "INSERT INTO sessions (id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path, created_by, updated_by)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'import', 'import')",
-        params![s.id, s.started_at, s.duration_secs, s.distance_m, s.avg_hr, s.max_hr, s.avg_pace_sec_per_km, s.zone2_pct, s.raw_fit_path],
+        "INSERT INTO sessions (id, started_at, duration_secs, distance_m, avg_hr, max_hr, avg_pace_sec_per_km, zone2_pct, raw_fit_path, ai_analysis, avg_cadence, efficiency_factor, aerobic_decoupling_pct, created_by, updated_by)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, 'import', 'import')",
+        params![s.id, s.started_at, s.duration_secs, s.distance_m, s.avg_hr, s.max_hr, s.avg_pace_sec_per_km, s.zone2_pct, s.raw_fit_path, s.ai_analysis, s.avg_cadence, s.efficiency_factor, s.aerobic_decoupling_pct],
+    )?;
+    Ok(())
+}
+
+pub fn update_session_analysis(conn: &Connection, id: &str, ai_analysis: &str) -> Result<()> {
+    conn.execute(
+        "UPDATE sessions SET ai_analysis = ?1, updated_at = CURRENT_TIMESTAMP WHERE id = ?2",
+        params![ai_analysis, id],
     )?;
     Ok(())
 }

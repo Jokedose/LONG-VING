@@ -9,9 +9,12 @@ import {
   Tooltip,
   ResponsiveContainer,
   ReferenceArea,
+  ReferenceLine,
 } from "recharts";
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
+import { ConfirmModal } from "../components/ConfirmModal";
 import { useParams, useNavigate, Link } from "react-router-dom";
+import ReactMarkdown from 'react-markdown';
 import { useUserProfile } from "../store/userStore";
 import { sessionRepository } from "../lib/db";
 import { queryKeys } from "../lib/queryKeys";
@@ -113,6 +116,27 @@ export default function SessionDetail() {
     return breakdown;
   }, [profile, records]);
 
+  const zone2AvgSpeed = useMemo(() => {
+    if (!profile || !records.length) return 0;
+    const maxHR = profile.max_hr || 185;
+    const restingHR = profile.resting_hr || 60;
+    const reserve = maxHR - restingHR;
+    const z2Min = restingHR + reserve * 0.6;
+    const z2Max = restingHR + reserve * 0.7;
+
+    const z2Records = records.filter(
+      (r: SessionRecord) => r.heart_rate && r.heart_rate >= z2Min && r.heart_rate < z2Max
+    );
+    if (!z2Records.length) return 0;
+    
+    const sumSpeed = z2Records.reduce((sum: number, r: SessionRecord) => sum + (r.speed_ms || 0), 0);
+    return sumSpeed / z2Records.length;
+  }, [profile, records]);
+  
+  const z2PaceSecPerKm = zone2AvgSpeed > 0 ? 1000 / zone2AvgSpeed : 0;
+  const z2PaceMin = Math.floor(z2PaceSecPerKm / 60);
+  const z2PaceSec = Math.round(z2PaceSecPerKm % 60);
+
   const chartData = useMemo(() => {
     if (!records.length) return [];
     const sampleRate = Math.max(1, Math.floor(records.length / 300));
@@ -125,6 +149,8 @@ export default function SessionDetail() {
         speed: (r.speed_ms || 0).toFixed(1),
       }));
   }, [records]);
+
+  const [isDeleteModalOpen, setIsDeleteModalOpen] = useState(false);
 
   const isLoading = loadingSession || loadingRecords;
 
@@ -171,10 +197,7 @@ export default function SessionDetail() {
         </div>
         <div className="flex gap-2">
           <button
-            onClick={() =>
-              window.confirm("คุณต้องการลบข้อมูลการวิ่งนี้ใช่หรือไม่?") &&
-              deleteMutation.mutate()
-            }
+            onClick={() => setIsDeleteModalOpen(true)}
             disabled={deleteMutation.isPending}
             className="px-4 py-2 text-xs font-black uppercase tracking-widest text-rose-600 hover:bg-rose-50 dark:hover:bg-rose-950/20 rounded-xl transition-all border border-rose-100 dark:border-rose-900/30 disabled:opacity-40"
           >
@@ -182,6 +205,14 @@ export default function SessionDetail() {
           </button>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={isDeleteModalOpen}
+        title="ยืนยันการลบข้อมูล"
+        message="คุณต้องการลบข้อมูลการวิ่งนี้ใช่หรือไม่? ข้อมูลบันทึกและสถิติทั้งหมดที่เกี่ยวข้องจะถูกลบทิ้งถาวร"
+        onConfirm={() => deleteMutation.mutate()}
+        onCancel={() => setIsDeleteModalOpen(false)}
+      />
 
       {/* Hero Stats */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
@@ -273,6 +304,74 @@ export default function SessionDetail() {
             </svg>
           }
         />
+        <StatCard
+          label="Z2 Avg Pace"
+          value={z2PaceMin > 0 ? `${z2PaceMin}:${z2PaceSec.toString().padStart(2, "0")}` : "-"}
+          unit="/KM"
+          highlight={z2PaceMin > 0 && z2PaceMin <= 7}
+          icon={
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeWidth={2.5}
+                d="M13 10V3L4 14h7v7l9-11h-7z"
+              />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Avg Cadence"
+          value={session.avg_cadence ? String(session.avg_cadence) : "-"}
+          unit="SPM"
+          highlight={session.avg_cadence ? session.avg_cadence >= 170 : false}
+          icon={
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 10V3L4 14h7v7l9-11h-7z" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Efficiency (EF)"
+          value={session.efficiency_factor ? session.efficiency_factor.toFixed(2) : "-"}
+          unit="Speed/HR"
+          icon={
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6" />
+            </svg>
+          }
+        />
+        <StatCard
+          label="Aerobic Decoup."
+          value={session.aerobic_decoupling_pct !== undefined ? String(session.aerobic_decoupling_pct.toFixed(1)) : "-"}
+          unit="%"
+          highlight={session.aerobic_decoupling_pct !== undefined && session.aerobic_decoupling_pct <= 5}
+          icon={
+            <svg
+              className="w-4 h-4"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke="currentColor"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+          }
+        />
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
@@ -347,7 +446,7 @@ export default function SessionDetail() {
                       itemStyle={{ color: "#fff" }}
                       labelStyle={{ display: "none" }}
                     />
-                    {profile && (
+                    {profile && profile.resting_hr && profile.max_hr && (
                       <ReferenceArea
                         y1={
                           profile.resting_hr +
@@ -423,12 +522,6 @@ export default function SessionDetail() {
                       tickLine={false}
                       interval={50}
                     />
-                    <YAxis
-                      domain={[0, "auto"]}
-                      axisLine={false}
-                      tickLine={false}
-                      tick={{ fontSize: 10, fill: "#71717a" }}
-                    />
                     <Tooltip
                       contentStyle={{
                         backgroundColor: "#09090b",
@@ -442,6 +535,18 @@ export default function SessionDetail() {
                         fontSize: "10px",
                         marginBottom: "4px",
                       }}
+                    />
+                    <YAxis
+                      domain={[0, "auto"]}
+                      axisLine={false}
+                      tickLine={false}
+                      tick={{ fontSize: 10, fill: "#71717a" }}
+                    />
+                    <ReferenceLine 
+                      y={2.38} 
+                      stroke="#10b981" 
+                      strokeDasharray="3 3" 
+                      label={{ position: 'insideTopLeft', value: 'Pace 7 Target (2.38 m/s)', fill: '#10b981', fontSize: 10 }} 
                     />
                     <Area
                       type="monotone"
@@ -611,6 +716,20 @@ export default function SessionDetail() {
             </div>
           </div>
         </div>
+
+        {session.ai_analysis && (
+          <div className="lg:col-span-3 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-[32px] p-8 shadow-sm">
+            <h3 className="text-xl font-black mb-6 flex items-center gap-2">
+              <span className="bg-gradient-to-r from-blue-500 to-purple-500 text-transparent bg-clip-text">AI Analysis</span>
+              <svg className="w-5 h-5 text-purple-500" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L9.5 9.5L2 12L9.5 14.5L12 22L14.5 14.5L22 12L14.5 9.5L12 2Z"/></svg>
+            </h3>
+            <div className="prose dark:prose-invert max-w-none text-sm leading-relaxed prose-h1:text-xl prose-h2:text-lg prose-h3:text-base prose-a:text-blue-500 hover:prose-a:underline">
+              <ReactMarkdown>
+                {session.ai_analysis}
+              </ReactMarkdown>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

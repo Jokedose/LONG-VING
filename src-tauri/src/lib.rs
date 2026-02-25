@@ -75,6 +75,12 @@ fn create_records_chunk(state: State<'_, DbManager>, session_id: String, records
 }
 
 #[tauri::command]
+fn update_session_analysis(state: State<'_, DbManager>, id: String, ai_analysis: String) -> Result<(), String> {
+    let conn = state.get_connection().map_err(|e| e.to_string())?;
+    db::update_session_analysis(&conn, &id, &ai_analysis).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn get_all_body_metrics(state: State<'_, DbManager>) -> Result<Vec<BodyMetrics>, String> {
     let conn = state.get_connection().map_err(|e| e.to_string())?;
     db::get_all_body_metrics(&conn).map_err(|e| e.to_string())
@@ -243,6 +249,7 @@ pub fn run() {
             is_session_duplicate,
             create_session,
             create_records_chunk,
+            update_session_analysis,
             get_all_body_metrics,
             delete_body_metrics,
             add_body_metrics,
